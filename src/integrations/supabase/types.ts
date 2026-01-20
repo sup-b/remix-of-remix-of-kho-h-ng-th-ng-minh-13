@@ -168,6 +168,7 @@ export type Database = {
           barcode: string | null
           category_id: string | null
           code: string
+          cost_price: number
           created_at: string
           id: string
           image_url: string | null
@@ -175,14 +176,17 @@ export type Database = {
           notes: string | null
           sale_price_default: number
           status: string
+          stock: number
           track_inventory: boolean
           unit: string
           updated_at: string
+          vat_sale: number
         }
         Insert: {
           barcode?: string | null
           category_id?: string | null
           code: string
+          cost_price?: number
           created_at?: string
           id?: string
           image_url?: string | null
@@ -190,14 +194,17 @@ export type Database = {
           notes?: string | null
           sale_price_default?: number
           status?: string
+          stock?: number
           track_inventory?: boolean
           unit?: string
           updated_at?: string
+          vat_sale?: number
         }
         Update: {
           barcode?: string | null
           category_id?: string | null
           code?: string
+          cost_price?: number
           created_at?: string
           id?: string
           image_url?: string | null
@@ -205,9 +212,11 @@ export type Database = {
           notes?: string | null
           sale_price_default?: number
           status?: string
+          stock?: number
           track_inventory?: boolean
           unit?: string
           updated_at?: string
+          vat_sale?: number
         }
         Relationships: [
           {
@@ -245,6 +254,119 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
+      }
+      purchase_order_items: {
+        Row: {
+          created_at: string
+          discount: number | null
+          id: string
+          import_price: number
+          product_id: string
+          purchase_order_id: string
+          quantity: number
+          total_amount: number
+          unit_price: number
+        }
+        Insert: {
+          created_at?: string
+          discount?: number | null
+          id?: string
+          import_price?: number
+          product_id: string
+          purchase_order_id: string
+          quantity: number
+          total_amount: number
+          unit_price: number
+        }
+        Update: {
+          created_at?: string
+          discount?: number | null
+          id?: string
+          import_price?: number
+          product_id?: string
+          purchase_order_id?: string
+          quantity?: number
+          total_amount?: number
+          unit_price?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "purchase_order_items_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "purchase_order_items_purchase_order_id_fkey"
+            columns: ["purchase_order_id"]
+            isOneToOne: false
+            referencedRelation: "purchase_orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      purchase_orders: {
+        Row: {
+          code: string
+          created_at: string
+          created_by: string | null
+          discount_type: string | null
+          discount_value: number | null
+          final_amount: number
+          id: string
+          note: string | null
+          other_fee: number | null
+          received_at: string
+          status: string
+          supplier_id: string | null
+          total_amount: number
+          updated_at: string
+          vat_amount: number | null
+        }
+        Insert: {
+          code: string
+          created_at?: string
+          created_by?: string | null
+          discount_type?: string | null
+          discount_value?: number | null
+          final_amount?: number
+          id?: string
+          note?: string | null
+          other_fee?: number | null
+          received_at?: string
+          status?: string
+          supplier_id?: string | null
+          total_amount?: number
+          updated_at?: string
+          vat_amount?: number | null
+        }
+        Update: {
+          code?: string
+          created_at?: string
+          created_by?: string | null
+          discount_type?: string | null
+          discount_value?: number | null
+          final_amount?: number
+          id?: string
+          note?: string | null
+          other_fee?: number | null
+          received_at?: string
+          status?: string
+          supplier_id?: string | null
+          total_amount?: number
+          updated_at?: string
+          vat_amount?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "purchase_orders_supplier_id_fkey"
+            columns: ["supplier_id"]
+            isOneToOne: false
+            referencedRelation: "suppliers"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       purchase_receipt_items: {
         Row: {
@@ -472,6 +594,187 @@ export type Database = {
           },
         ]
       }
+      sales_order_items: {
+        Row: {
+          cost_price: number
+          created_at: string
+          discount: number | null
+          id: string
+          product_id: string
+          profit: number
+          quantity: number
+          sales_order_id: string
+          total_amount: number
+          unit_price: number
+        }
+        Insert: {
+          cost_price?: number
+          created_at?: string
+          discount?: number | null
+          id?: string
+          product_id: string
+          profit?: number
+          quantity: number
+          sales_order_id: string
+          total_amount: number
+          unit_price: number
+        }
+        Update: {
+          cost_price?: number
+          created_at?: string
+          discount?: number | null
+          id?: string
+          product_id?: string
+          profit?: number
+          quantity?: number
+          sales_order_id?: string
+          total_amount?: number
+          unit_price?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sales_order_items_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sales_order_items_sales_order_id_fkey"
+            columns: ["sales_order_id"]
+            isOneToOne: false
+            referencedRelation: "sales_orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sales_orders: {
+        Row: {
+          after_discount: number
+          code: string
+          created_at: string
+          created_by: string | null
+          customer_id: string | null
+          discount_type: string | null
+          discount_value: number | null
+          final_amount: number
+          id: string
+          note: string | null
+          other_fee: number | null
+          paid_amount: number
+          payment_status: string
+          sale_date: string
+          status: string
+          total_items: number
+          updated_at: string
+          vat_amount: number | null
+          vat_rate: number | null
+        }
+        Insert: {
+          after_discount?: number
+          code: string
+          created_at?: string
+          created_by?: string | null
+          customer_id?: string | null
+          discount_type?: string | null
+          discount_value?: number | null
+          final_amount?: number
+          id?: string
+          note?: string | null
+          other_fee?: number | null
+          paid_amount?: number
+          payment_status?: string
+          sale_date?: string
+          status?: string
+          total_items?: number
+          updated_at?: string
+          vat_amount?: number | null
+          vat_rate?: number | null
+        }
+        Update: {
+          after_discount?: number
+          code?: string
+          created_at?: string
+          created_by?: string | null
+          customer_id?: string | null
+          discount_type?: string | null
+          discount_value?: number | null
+          final_amount?: number
+          id?: string
+          note?: string | null
+          other_fee?: number | null
+          paid_amount?: number
+          payment_status?: string
+          sale_date?: string
+          status?: string
+          total_items?: number
+          updated_at?: string
+          vat_amount?: number | null
+          vat_rate?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sales_orders_customer_id_fkey"
+            columns: ["customer_id"]
+            isOneToOne: false
+            referencedRelation: "customers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      stock_cards: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          id: string
+          note: string | null
+          product_id: string
+          quantity: number
+          ref_code: string
+          ref_type: string
+          stock_after: number
+          stock_before: number
+          transaction_type: string
+          unit_cost: number | null
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          note?: string | null
+          product_id: string
+          quantity: number
+          ref_code: string
+          ref_type: string
+          stock_after?: number
+          stock_before?: number
+          transaction_type: string
+          unit_cost?: number | null
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          note?: string | null
+          product_id?: string
+          quantity?: number
+          ref_code?: string
+          ref_type?: string
+          stock_after?: number
+          stock_before?: number
+          transaction_type?: string
+          unit_cost?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "stock_cards_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       suppliers: {
         Row: {
           address: string | null
@@ -537,8 +840,12 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      generate_product_code: { Args: never; Returns: string }
       generate_purchase_code: { Args: never; Returns: string }
+      generate_purchase_order_code: { Args: never; Returns: string }
       generate_sales_code: { Args: never; Returns: string }
+      generate_sales_order_code: { Args: never; Returns: string }
+      generate_supplier_code: { Args: never; Returns: string }
       get_average_cost: { Args: { p_product_id: string }; Returns: number }
       get_product_stock: { Args: { p_product_id: string }; Returns: number }
       get_user_role: {
