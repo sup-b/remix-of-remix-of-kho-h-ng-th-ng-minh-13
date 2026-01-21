@@ -59,10 +59,10 @@ import {
   useCategories,
   useCreateSupplier,
   useCreateProduct,
-  useCreatePurchaseReceipt,
   formatCurrency,
   Product,
 } from '@/hooks/useSupabaseData';
+import { useCreatePurchaseOrder } from '@/hooks/usePurchaseOrders';
 
 interface ImportItem {
   id: string;
@@ -84,7 +84,7 @@ export default function ImportCreate() {
   const { data: categories = [] } = useCategories();
   const createSupplier = useCreateSupplier();
   const createProduct = useCreateProduct();
-  const createPurchaseReceipt = useCreatePurchaseReceipt();
+  const createPurchaseOrder = useCreatePurchaseOrder();
 
   // Form state
   const [items, setItems] = useState<ImportItem[]>([]);
@@ -93,7 +93,7 @@ export default function ImportCreate() {
   const [discountType, setDiscountType] = useState<'amount' | 'percent'>('amount');
   const [discountValue, setDiscountValue] = useState(0);
   const [importVat, setImportVat] = useState(false);
-  const [vatAmount, setVatAmount] = useState(0);
+  const [vatRate, setVatRate] = useState(10);
   const [otherCost, setOtherCost] = useState(0);
   const [note, setNote] = useState('');
   const [isSaving, setIsSaving] = useState(false);
@@ -151,16 +151,19 @@ export default function ImportCreate() {
     return discountValue;
   }, [totalItemsAmount, discountType, discountValue]);
 
-  const vatAmountCalc = useMemo(() => (importVat ? vatAmount : 0), [importVat, vatAmount]);
+  const afterDiscount = useMemo(
+    () => Math.max(0, totalItemsAmount - discountAmount),
+    [totalItemsAmount, discountAmount]
+  );
 
-  const supplierPayable = useMemo(
-    () => Math.max(0, totalItemsAmount - discountAmount + vatAmountCalc),
-    [totalItemsAmount, discountAmount, vatAmountCalc]
+  const vatAmountCalc = useMemo(
+    () => (importVat ? afterDiscount * (vatRate / 100) : 0),
+    [importVat, afterDiscount, vatRate]
   );
 
   const totalPayable = useMemo(
-    () => Math.max(0, supplierPayable + otherCost),
-    [supplierPayable, otherCost]
+    () => Math.max(0, afterDiscount + vatAmountCalc + otherCost),
+    [afterDiscount, vatAmountCalc, otherCost]
   );
 
   // Filtered products for search
@@ -203,9 +206,9 @@ export default function ImportCreate() {
         product_name: product.name,
         unit: product.unit,
         quantity: 1,
-        unit_price: product.average_cost || 0,
+        unit_price: product.cost_price || 0,
         discount: 0,
-        amount: product.average_cost || 0,
+        amount: product.cost_price || 0,
       };
       setItems((prev) => [...prev, newItem]);
     }
@@ -300,6 +303,23 @@ export default function ImportCreate() {
     }
   };
 
+  // Prepare order data for API
+  const prepareOrderData = () => ({
+    supplier_id: supplierId || null,
+    items: items.map((item) => ({
+      product_id: item.product_id,
+      quantity: item.quantity,
+      unit_price: item.unit_price,
+      discount: item.discount,
+    })),
+    discount_type: discountType,
+    discount_value: discountValue,
+    vat_rate: importVat ? vatRate : 0,
+    other_fee: otherCost,
+    note,
+    received_at: new Date(importDate).toISOString(),
+  });
+
   // Save draft
   const handleSaveDraft = async () => {
     if (items.length === 0) {
@@ -309,22 +329,7 @@ export default function ImportCreate() {
 
     setIsSaving(true);
     try {
-      await createPurchaseReceipt.mutateAsync({
-        supplier_id: supplierId || null,
-        receipt_date: new Date(importDate).toISOString(),
-        discount_type: discountType,
-        discount_value: discountValue,
-        note,
-        status: 'draft',
-        items: items.map((item) => ({
-          product_id: item.product_id,
-          quantity: item.quantity,
-          unit_price: item.unit_price,
-          discount: item.discount,
-          total_price: item.amount,
-        })),
-      });
-
+      await createPurchaseOrder.mutateAsync(prepareOrderData());
       toast({ title: 'Thành công', description: 'Đã lưu phiếu tạm (chưa cập nhật kho)' });
       navigate('/imports');
     } catch (error: any) {
@@ -334,7 +339,7 @@ export default function ImportCreate() {
     }
   };
 
-  // Complete import
+  // Complete import (create + complete immediately)
   const handleComplete = async () => {
     if (items.length === 0) {
       toast({ title: 'Lỗi', description: 'Vui lòng thêm hàng hóa', variant: 'destructive' });
@@ -355,21 +360,18 @@ export default function ImportCreate() {
 
     setIsSaving(true);
     try {
-      await createPurchaseReceipt.mutateAsync({
-        supplier_id: supplierId || null,
-        receipt_date: new Date(importDate).toISOString(),
-        discount_type: discountType,
-        discount_value: discountValue,
-        note,
-        status: 'completed',
-        items: items.map((item) => ({
-          product_id: item.product_id,
-          quantity: item.quantity,
-          unit_price: item.unit_price,
-          discount: item.discount,
-          total_price: item.amount,
-        })),
+      // Create order first
+      const order = await createPurchaseOrder.mutateAsync(prepareOrderData());
+      
+      // Complete immediately
+      const { supabase } = await import('@/integrations/supabase/client');
+      const { data, error } = await supabase.functions.invoke('purchase-order', {
+        body: { action: 'complete', order_id: order.id },
       });
+
+      if (error || !data?.success) {
+        throw new Error(data?.error || error?.message || 'Không thể hoàn thành phiếu nhập');
+      }
 
       toast({ title: 'Thành công', description: 'Đã hoàn thành phiếu nhập và cập nhật kho' });
       navigate('/imports');
@@ -379,6 +381,8 @@ export default function ImportCreate() {
       setIsSaving(false);
     }
   };
+
+  const selectedSupplier = suppliers.find((s) => s.id === supplierId);
 
   return (
     <AppLayout title="Tạo phiếu nhập">
@@ -435,7 +439,7 @@ export default function ImportCreate() {
                                 Mã: {product.code} | Giá: {formatCurrency(product.sale_price_default)}
                               </div>
                               <div className="text-xs text-muted-foreground">
-                                Tồn: {product.stock_qty || 0} | Giá vốn: {formatCurrency(product.average_cost || 0)}
+                                Tồn: {product.stock || 0} | Giá vốn: {formatCurrency(product.cost_price || 0)}
                               </div>
                             </div>
                           </CommandItem>
@@ -528,8 +532,9 @@ export default function ImportCreate() {
                             variant="ghost"
                             size="icon"
                             onClick={() => removeItem(item.id)}
+                            className="text-destructive hover:text-destructive"
                           >
-                            <Trash2 className="w-4 h-4 text-destructive" />
+                            <Trash2 className="w-4 h-4" />
                           </Button>
                         </TableCell>
                       </TableRow>
@@ -538,118 +543,133 @@ export default function ImportCreate() {
                 </TableBody>
               </Table>
             </div>
+
+            {/* Notes */}
+            <div className="bg-card rounded-lg border p-4">
+              <Label className="text-sm font-medium">Ghi chú</Label>
+              <Textarea
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="Nhập ghi chú cho phiếu nhập..."
+                className="mt-2"
+              />
+            </div>
           </div>
 
-          {/* Right: Import Info */}
+          {/* Right Panel */}
           <div className="space-y-4">
-            {/* Supplier */}
-            <div className="bg-card rounded-lg border p-4 space-y-3">
-              <Label>Nhà cung cấp</Label>
-              <div className="flex gap-2">
-                <Select value={supplierId} onValueChange={setSupplierId}>
-                  <SelectTrigger className="flex-1">
-                    <SelectValue placeholder="Chọn NCC hoặc để trống" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {suppliers.map((s) => (
-                      <SelectItem key={s.id} value={s.id}>
-                        {s.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  onClick={() => setIsCreateSupplierOpen(true)}
-                >
-                  <Plus className="w-4 h-4" />
-                </Button>
+            {/* Supplier Selection */}
+            <div className="bg-card rounded-lg border p-4 space-y-4">
+              <div>
+                <Label className="text-sm font-medium">Nhà cung cấp</Label>
+                <div className="flex gap-2 mt-2">
+                  <Select value={supplierId} onValueChange={setSupplierId}>
+                    <SelectTrigger className="flex-1">
+                      <SelectValue placeholder="Chọn nhà cung cấp" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {suppliers.map((s) => (
+                        <SelectItem key={s.id} value={s.id}>
+                          <span className="font-mono text-xs mr-2">{s.code}</span>
+                          {s.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() => setIsCreateSupplierOpen(true)}
+                  >
+                    <Plus className="w-4 h-4" />
+                  </Button>
+                </div>
+                {selectedSupplier && (
+                  <div className="mt-2 p-2 bg-muted/50 rounded text-sm">
+                    <p className="font-mono text-primary">{selectedSupplier.code}</p>
+                    <p>{selectedSupplier.name}</p>
+                    {selectedSupplier.phone && <p className="text-muted-foreground">{selectedSupplier.phone}</p>}
+                  </div>
+                )}
               </div>
-              {!supplierId && (
-                <p className="text-xs text-muted-foreground">
-                  Để trống sẽ mặc định "Khách lẻ"
-                </p>
-              )}
-            </div>
 
-            {/* Import Info */}
-            <div className="bg-card rounded-lg border p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <Label>Mã phiếu nhập</Label>
-                <Badge variant="secondary">Tự sinh</Badge>
+              <div>
+                <Label className="text-sm font-medium">Mã phiếu nhập</Label>
+                <Input
+                  value="(Tự động sinh)"
+                  disabled
+                  className="mt-2 bg-muted"
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Mã sẽ được tạo khi lưu phiếu (format: PNmmdd000)
+                </p>
               </div>
-              <Input value="PN..." disabled className="bg-muted" />
-              
-              <div className="space-y-2">
-                <Label>Ngày nhập</Label>
+
+              <div>
+                <Label className="text-sm font-medium">Thời gian nhập</Label>
                 <Input
                   type="datetime-local"
                   value={importDate}
                   onChange={(e) => setImportDate(e.target.value)}
+                  className="mt-2"
                 />
-              </div>
-
-              <div className="space-y-2">
-                <Label>Trạng thái</Label>
-                <Badge variant="outline">Phiếu mới</Badge>
               </div>
             </div>
 
-            {/* Cost Calculation */}
-            <div className="bg-card rounded-lg border p-4 space-y-3">
-              <h4 className="font-medium">Tính tiền</h4>
-              
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Tổng tiền hàng:</span>
+            {/* Calculation Panel */}
+            <div className="bg-card rounded-lg border p-4 space-y-4">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Tổng tiền hàng</span>
                 <span className="font-medium">{formatCurrency(totalItemsAmount)}</span>
               </div>
 
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-muted-foreground flex-1">Giảm giá:</span>
-                <Select
-                  value={discountType}
-                  onValueChange={(v) => setDiscountType(v as 'amount' | 'percent')}
-                >
-                  <SelectTrigger className="w-20">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="amount">VND</SelectItem>
-                    <SelectItem value="percent">%</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Input
-                  type="number"
-                  value={discountValue}
-                  onChange={(e) => setDiscountValue(Math.max(0, parseFloat(e.target.value) || 0))}
-                  min={0}
-                  className="w-24 text-right"
-                />
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">Giảm giá</Label>
+                <div className="flex gap-2">
+                  <Select
+                    value={discountType}
+                    onValueChange={(v: 'amount' | 'percent') => setDiscountType(v)}
+                  >
+                    <SelectTrigger className="w-24">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="amount">VNĐ</SelectItem>
+                      <SelectItem value="percent">%</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Input
+                    type="number"
+                    value={discountValue}
+                    onChange={(e) => setDiscountValue(Math.max(0, parseFloat(e.target.value) || 0))}
+                    min={0}
+                    className="flex-1"
+                  />
+                </div>
               </div>
 
               <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">VAT nhập hàng:</span>
+                <Label className="text-sm font-medium">VAT nhập hàng</Label>
                 <Switch checked={importVat} onCheckedChange={setImportVat} />
               </div>
 
               {importVat && (
-                <Input
-                  type="number"
-                  value={vatAmount}
-                  onChange={(e) => setVatAmount(Math.max(0, parseFloat(e.target.value) || 0))}
-                  min={0}
-                  placeholder="Số tiền VAT"
-                />
+                <div className="flex gap-2 items-center">
+                  <Label className="text-sm text-muted-foreground">Thuế suất:</Label>
+                  <Input
+                    type="number"
+                    value={vatRate}
+                    onChange={(e) => setVatRate(Math.max(0, parseFloat(e.target.value) || 0))}
+                    min={0}
+                    max={100}
+                    className="w-20"
+                  />
+                  <span className="text-sm text-muted-foreground">%</span>
+                </div>
               )}
 
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Chi phí trả NCC:</span>
-                <span className="font-medium">{formatCurrency(supplierPayable)}</span>
-              </div>
-
               <div className="space-y-2">
-                <Label className="text-sm text-muted-foreground">Chi phí khác:</Label>
+                <Label className="text-sm font-medium">Chi phí khác</Label>
                 <Input
                   type="number"
                   value={otherCost}
@@ -658,26 +678,33 @@ export default function ImportCreate() {
                 />
               </div>
 
-              <div className="border-t pt-3 flex justify-between">
-                <span className="font-medium">Cần trả NCC:</span>
-                <span className="text-lg font-bold text-primary">
-                  {formatCurrency(totalPayable)}
-                </span>
+              <div className="border-t pt-4 space-y-2">
+                {discountAmount > 0 && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Giảm giá</span>
+                    <span className="text-destructive">-{formatCurrency(discountAmount)}</span>
+                  </div>
+                )}
+                {vatAmountCalc > 0 && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">VAT ({vatRate}%)</span>
+                    <span>{formatCurrency(vatAmountCalc)}</span>
+                  </div>
+                )}
+                {otherCost > 0 && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Chi phí khác</span>
+                    <span>{formatCurrency(otherCost)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between font-semibold text-lg pt-2 border-t">
+                  <span>Cần trả NCC</span>
+                  <span className="text-primary">{formatCurrency(totalPayable)}</span>
+                </div>
               </div>
             </div>
 
-            {/* Note */}
-            <div className="bg-card rounded-lg border p-4 space-y-2">
-              <Label>Ghi chú</Label>
-              <Textarea
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                placeholder="Ghi chú phiếu nhập..."
-                rows={3}
-              />
-            </div>
-
-            {/* Actions */}
+            {/* Action Buttons */}
             <div className="flex gap-2">
               <Button
                 variant="outline"
@@ -703,53 +730,42 @@ export default function ImportCreate() {
 
       {/* Product Grid Dialog */}
       <Dialog open={isProductGridOpen} onOpenChange={setIsProductGridOpen}>
-        <DialogContent className="max-w-4xl max-h-[80vh]">
+        <DialogContent className="max-w-4xl max-h-[80vh] overflow-hidden flex flex-col">
           <DialogHeader>
             <DialogTitle>Chọn hàng hóa</DialogTitle>
-            <DialogDescription>Chọn nhóm hàng và sản phẩm để thêm vào phiếu nhập</DialogDescription>
+            <DialogDescription>Chọn từ danh sách hàng hóa</DialogDescription>
           </DialogHeader>
-          <div className="flex gap-4">
-            <div className="w-48 space-y-2">
-              <Label>Nhóm hàng</Label>
-              <div className="space-y-1 max-h-96 overflow-auto">
-                <Button
-                  variant={selectedCategory === 'all' ? 'secondary' : 'ghost'}
-                  className="w-full justify-start"
-                  onClick={() => setSelectedCategory('all')}
+          <div className="flex gap-4 mb-4">
+            <Select value={selectedCategory} onValueChange={setSelectedCategory}>
+              <SelectTrigger className="w-48">
+                <SelectValue placeholder="Tất cả nhóm" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Tất cả nhóm</SelectItem>
+                {categories.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex-1 overflow-auto">
+            <div className="grid grid-cols-4 gap-3">
+              {gridProducts.map((product) => (
+                <div
+                  key={product.id}
+                  className="p-3 border rounded-lg cursor-pointer hover:bg-accent transition-colors"
+                  onClick={() => addProduct(product)}
                 >
-                  Tất cả
-                </Button>
-                {categories.map((cat) => (
-                  <Button
-                    key={cat.id}
-                    variant={selectedCategory === cat.id ? 'secondary' : 'ghost'}
-                    className="w-full justify-start"
-                    onClick={() => setSelectedCategory(cat.id)}
-                  >
-                    {cat.name}
-                  </Button>
-                ))}
-              </div>
-            </div>
-            <div className="flex-1">
-              <div className="grid grid-cols-3 gap-3 max-h-96 overflow-auto">
-                {gridProducts.map((product) => (
-                  <div
-                    key={product.id}
-                    className="p-3 border rounded-lg cursor-pointer hover:bg-accent transition-colors"
-                    onClick={() => addProduct(product)}
-                  >
-                    <p className="font-medium truncate">{product.name}</p>
-                    <p className="text-xs text-muted-foreground">{product.code}</p>
-                    <p className="text-sm text-primary mt-1">
-                      {formatCurrency(product.sale_price_default)}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      Tồn: {product.stock_qty || 0}
-                    </p>
+                  <p className="font-medium text-sm truncate">{product.name}</p>
+                  <p className="text-xs text-muted-foreground font-mono">{product.code}</p>
+                  <div className="flex justify-between mt-2 text-xs">
+                    <span>Tồn: {product.stock || 0}</span>
+                    <span className="text-primary">{formatCurrency(product.cost_price || 0)}</span>
                   </div>
-                ))}
-              </div>
+                </div>
+              ))}
             </div>
           </div>
         </DialogContent>
@@ -762,72 +778,60 @@ export default function ImportCreate() {
             <DialogTitle>Thêm hàng hóa mới</DialogTitle>
             <DialogDescription>Tạo nhanh hàng hóa và thêm vào phiếu nhập</DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Mã hàng</Label>
-                <Input
-                  value={newProduct.code}
-                  onChange={(e) => setNewProduct((p) => ({ ...p, code: e.target.value }))}
-                  placeholder="Tự sinh nếu để trống"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Tên hàng *</Label>
-                <Input
-                  value={newProduct.name}
-                  onChange={(e) => setNewProduct((p) => ({ ...p, name: e.target.value }))}
-                  placeholder="Nhập tên hàng"
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Nhóm hàng</Label>
-                <Select
-                  value={newProduct.category_id}
-                  onValueChange={(v) => setNewProduct((p) => ({ ...p, category_id: v }))}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Chọn nhóm" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {categories.map((cat) => (
-                      <SelectItem key={cat.id} value={cat.id}>
-                        {cat.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Đơn vị</Label>
-                <Select
-                  value={newProduct.unit}
-                  onValueChange={(v) => setNewProduct((p) => ({ ...p, unit: v }))}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="cái">Cái</SelectItem>
-                    <SelectItem value="chiếc">Chiếc</SelectItem>
-                    <SelectItem value="hộp">Hộp</SelectItem>
-                    <SelectItem value="kg">Kg</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label>Giá bán</Label>
+          <div className="space-y-4">
+            <div>
+              <Label>Mã hàng</Label>
               <Input
-                type="number"
-                value={newProduct.sale_price}
-                onChange={(e) =>
-                  setNewProduct((p) => ({ ...p, sale_price: parseFloat(e.target.value) || 0 }))
-                }
-                min={0}
+                value={newProduct.code}
+                onChange={(e) => setNewProduct((p) => ({ ...p, code: e.target.value }))}
+                placeholder="Để trống để tự động sinh"
               />
+            </div>
+            <div>
+              <Label>Tên hàng *</Label>
+              <Input
+                value={newProduct.name}
+                onChange={(e) => setNewProduct((p) => ({ ...p, name: e.target.value }))}
+                placeholder="Nhập tên hàng hóa"
+              />
+            </div>
+            <div>
+              <Label>Nhóm hàng</Label>
+              <Select
+                value={newProduct.category_id}
+                onValueChange={(v) => setNewProduct((p) => ({ ...p, category_id: v }))}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Chọn nhóm hàng" />
+                </SelectTrigger>
+                <SelectContent>
+                  {categories.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label>Đơn vị tính</Label>
+                <Input
+                  value={newProduct.unit}
+                  onChange={(e) => setNewProduct((p) => ({ ...p, unit: e.target.value }))}
+                />
+              </div>
+              <div>
+                <Label>Giá bán</Label>
+                <Input
+                  type="number"
+                  value={newProduct.sale_price}
+                  onChange={(e) =>
+                    setNewProduct((p) => ({ ...p, sale_price: parseFloat(e.target.value) || 0 }))
+                  }
+                  min={0}
+                />
+              </div>
             </div>
           </div>
           <DialogFooter>
@@ -835,37 +839,37 @@ export default function ImportCreate() {
               Hủy
             </Button>
             <Button onClick={handleCreateProduct} disabled={createProduct.isPending}>
-              Tạo & Thêm
+              Tạo và thêm vào phiếu
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Create Supplier Dialog */}
+      {/* Quick Create Supplier Dialog */}
       <Dialog open={isCreateSupplierOpen} onOpenChange={setIsCreateSupplierOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Thêm nhà cung cấp</DialogTitle>
-            <DialogDescription>Tạo nhà cung cấp mới</DialogDescription>
+            <DialogTitle>Thêm nhà cung cấp mới</DialogTitle>
+            <DialogDescription>Tạo nhanh nhà cung cấp</DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="space-y-2">
+          <div className="space-y-4">
+            <div>
               <Label>Tên NCC *</Label>
               <Input
                 value={newSupplier.name}
                 onChange={(e) => setNewSupplier((s) => ({ ...s, name: e.target.value }))}
-                placeholder="Nhập tên NCC"
+                placeholder="Nhập tên nhà cung cấp"
               />
             </div>
-            <div className="space-y-2">
+            <div>
               <Label>Số điện thoại</Label>
               <Input
                 value={newSupplier.phone}
                 onChange={(e) => setNewSupplier((s) => ({ ...s, phone: e.target.value }))}
-                placeholder="Nhập SĐT"
+                placeholder="Nhập số điện thoại"
               />
             </div>
-            <div className="space-y-2">
+            <div>
               <Label>Địa chỉ</Label>
               <Input
                 value={newSupplier.address}
@@ -879,7 +883,7 @@ export default function ImportCreate() {
               Hủy
             </Button>
             <Button onClick={handleCreateSupplier} disabled={createSupplier.isPending}>
-              Tạo
+              Tạo NCC
             </Button>
           </DialogFooter>
         </DialogContent>

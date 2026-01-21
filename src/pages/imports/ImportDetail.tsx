@@ -10,17 +10,40 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { ArrowLeft, Printer, Package } from 'lucide-react';
-import { usePurchaseReceiptWithItems, formatCurrency, formatDateTime } from '@/hooks/useSupabaseData';
+import { ArrowLeft, Printer, Package, CheckCircle } from 'lucide-react';
+import { usePurchaseOrderWithItems, useCompletePurchaseOrder } from '@/hooks/usePurchaseOrders';
+import { formatCurrency, formatDateTime } from '@/hooks/useSupabaseData';
+import { useToast } from '@/hooks/use-toast';
 
 export default function ImportDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { toast } = useToast();
 
-  const { data: receipt, isLoading } = usePurchaseReceiptWithItems(id || '');
+  const { data: order, isLoading, refetch } = usePurchaseOrderWithItems(id || '');
+  const completeMutation = useCompletePurchaseOrder();
 
   const handlePrint = () => {
     window.print();
+  };
+
+  const handleComplete = async () => {
+    if (!order) return;
+    
+    try {
+      await completeMutation.mutateAsync(order.id);
+      toast({
+        title: 'Thành công',
+        description: 'Đã hoàn thành phiếu nhập và cập nhật tồn kho',
+      });
+      refetch();
+    } catch (error: any) {
+      toast({
+        title: 'Lỗi',
+        description: error.message || 'Không thể hoàn thành phiếu nhập',
+        variant: 'destructive',
+      });
+    }
   };
 
   const getStatusBadge = (status: string) => {
@@ -54,7 +77,7 @@ export default function ImportDetail() {
     );
   }
 
-  if (!receipt) {
+  if (!order) {
     return (
       <AppLayout title="Chi tiết phiếu nhập">
         <div className="flex flex-col items-center justify-center h-64 gap-4">
@@ -66,8 +89,14 @@ export default function ImportDetail() {
     );
   }
 
+  // Calculate items total
+  const itemsTotal = (order.items || []).reduce(
+    (sum, item) => sum + Number(item.total_amount || 0),
+    0
+  );
+
   return (
-    <AppLayout title={receipt.code}>
+    <AppLayout title={order.code}>
       <div className="animate-fade-in">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
@@ -76,37 +105,53 @@ export default function ImportDetail() {
               <ArrowLeft className="w-5 h-5" />
             </Button>
             <div>
-              <h1 className="text-2xl font-bold">{receipt.code}</h1>
+              <h1 className="text-2xl font-bold">{order.code}</h1>
               <p className="text-sm text-muted-foreground">Chi tiết phiếu nhập hàng</p>
             </div>
-            {getStatusBadge(receipt.status)}
+            {getStatusBadge(order.status)}
           </div>
-          <Button variant="outline" onClick={handlePrint}>
-            <Printer className="w-4 h-4 mr-2" />
-            In
-          </Button>
+          <div className="flex items-center gap-2">
+            {order.status === 'draft' && (
+              <Button
+                onClick={handleComplete}
+                disabled={completeMutation.isPending}
+              >
+                <CheckCircle className="w-4 h-4 mr-2" />
+                {completeMutation.isPending ? 'Đang xử lý...' : 'Hoàn thành'}
+              </Button>
+            )}
+            <Button variant="outline" onClick={handlePrint}>
+              <Printer className="w-4 h-4 mr-2" />
+              In
+            </Button>
+          </div>
         </div>
 
         {/* Info Cards */}
         <div className="grid grid-cols-4 gap-4 mb-6">
           <div className="bg-card rounded-lg border p-4">
             <p className="text-sm text-muted-foreground">Mã phiếu</p>
-            <p className="font-mono font-semibold text-lg">{receipt.code}</p>
+            <p className="font-mono font-semibold text-lg">{order.code}</p>
           </div>
           <div className="bg-card rounded-lg border p-4">
             <p className="text-sm text-muted-foreground">Nhà cung cấp</p>
             <p className="font-semibold text-lg">
-              {(receipt.supplier as any)?.name || 'Khách lẻ'}
+              {(order.supplier as any)?.name || 'Khách lẻ'}
             </p>
+            {(order.supplier as any)?.code && (
+              <p className="text-sm text-muted-foreground font-mono">
+                {(order.supplier as any).code}
+              </p>
+            )}
           </div>
           <div className="bg-card rounded-lg border p-4">
-            <p className="text-sm text-muted-foreground">Ngày nhập</p>
-            <p className="font-semibold text-lg">{formatDateTime(receipt.receipt_date)}</p>
+            <p className="text-sm text-muted-foreground">Thời gian nhập</p>
+            <p className="font-semibold text-lg">{formatDateTime(order.received_at)}</p>
           </div>
           <div className="bg-card rounded-lg border p-4">
-            <p className="text-sm text-muted-foreground">Tổng tiền</p>
+            <p className="text-sm text-muted-foreground">Tổng tiền hàng</p>
             <p className="font-semibold text-lg text-primary">
-              {formatCurrency(receipt.final_amount)}
+              {formatCurrency(itemsTotal)}
             </p>
           </div>
         </div>
@@ -122,6 +167,7 @@ export default function ImportDetail() {
                 <TableHead className="w-12">STT</TableHead>
                 <TableHead>Mã hàng</TableHead>
                 <TableHead>Tên hàng</TableHead>
+                <TableHead>ĐVT</TableHead>
                 <TableHead className="text-right">Số lượng</TableHead>
                 <TableHead className="text-right">Đơn giá</TableHead>
                 <TableHead className="text-right">Giảm giá</TableHead>
@@ -129,18 +175,19 @@ export default function ImportDetail() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {(receipt.items || []).map((item, index) => (
+              {(order.items || []).map((item, index) => (
                 <TableRow key={item.id}>
                   <TableCell>{index + 1}</TableCell>
                   <TableCell className="font-mono text-sm">
                     {(item.product as any)?.code || '-'}
                   </TableCell>
                   <TableCell>{(item.product as any)?.name || '-'}</TableCell>
+                  <TableCell>{(item.product as any)?.unit || '-'}</TableCell>
                   <TableCell className="text-right">{item.quantity}</TableCell>
                   <TableCell className="text-right">{formatCurrency(item.unit_price)}</TableCell>
                   <TableCell className="text-right">{formatCurrency(item.discount || 0)}</TableCell>
                   <TableCell className="text-right font-medium">
-                    {formatCurrency(item.total_price)}
+                    {formatCurrency(item.total_amount)}
                   </TableCell>
                 </TableRow>
               ))}
@@ -153,25 +200,33 @@ export default function ImportDetail() {
           <div className="max-w-sm ml-auto space-y-2">
             <div className="flex justify-between">
               <span className="text-muted-foreground">Tổng tiền hàng</span>
-              <span>{formatCurrency(receipt.total_amount)}</span>
+              <span>{formatCurrency(itemsTotal)}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Giảm giá</span>
               <span>
-                {receipt.discount_type === 'percent'
-                  ? `${receipt.discount_value}%`
-                  : formatCurrency(receipt.discount_value || 0)}
+                {order.discount_type === 'percent'
+                  ? `${order.discount_value}%`
+                  : formatCurrency(order.discount_value || 0)}
               </span>
             </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">VAT nhập hàng</span>
+              <span>{formatCurrency(order.vat_amount || 0)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Chi phí khác</span>
+              <span>{formatCurrency(order.other_fee || 0)}</span>
+            </div>
             <div className="flex justify-between pt-2 border-t font-semibold text-lg">
-              <span>Tổng cần trả NCC</span>
-              <span className="text-primary">{formatCurrency(receipt.final_amount)}</span>
+              <span>Cần trả NCC</span>
+              <span className="text-primary">{formatCurrency(order.final_amount)}</span>
             </div>
           </div>
-          {receipt.note && (
+          {order.note && (
             <div className="mt-4 pt-4 border-t">
               <p className="text-sm text-muted-foreground">Ghi chú:</p>
-              <p>{receipt.note}</p>
+              <p>{order.note}</p>
             </div>
           )}
         </div>
