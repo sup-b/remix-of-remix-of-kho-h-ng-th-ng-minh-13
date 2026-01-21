@@ -14,6 +14,7 @@ import ImportCreate from "./pages/imports/ImportCreate";
 import ImportDetail from "./pages/imports/ImportDetail";
 import CreateSale from "./pages/CreateSale";
 import Sales from "./pages/Sales";
+import SalesOrderDetail from "./pages/sales/SalesOrderDetail";
 import Customers from "./pages/Customers";
 import Suppliers from "./pages/Suppliers";
 import Reports from "./pages/Reports";
@@ -40,6 +41,7 @@ const App = () => (
             <Route path="/imports/:id" element={<ImportDetail />} />
             <Route path="/sales" element={<Sales />} />
             <Route path="/sales/create" element={<CreateSale />} />
+            <Route path="/sales/:id" element={<SalesOrderDetail />} />
             <Route path="/customers" element={<Customers />} />
             <Route path="/suppliers" element={<Suppliers />} />
             <Route path="/reports" element={<Reports />} />
