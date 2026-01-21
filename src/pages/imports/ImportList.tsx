@@ -21,13 +21,6 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover';
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import {
   Plus,
   Filter,
   Search,
@@ -36,21 +29,14 @@ import {
   ChevronRight,
   X,
 } from 'lucide-react';
-import {
-  usePurchaseReceipts,
-  useSuppliers,
-  formatCurrency,
-  formatDateTime,
-} from '@/hooks/useSupabaseData';
+import { usePurchaseOrders } from '@/hooks/usePurchaseOrders';
+import { formatCurrency, formatDateTime } from '@/hooks/useSupabaseData';
 import { useDebounce } from '@/hooks/useDebounce';
 
 const PAGE_SIZE = 50;
 
 interface AdvancedFilters {
   importCode: string;
-  purchaseOrderCode: string;
-  productCode: string;
-  productName: string;
   supplierCode: string;
   supplierName: string;
   note: string;
@@ -58,16 +44,16 @@ interface AdvancedFilters {
 
 export default function ImportList() {
   const navigate = useNavigate();
-  const { data: receipts = [], isLoading } = usePurchaseReceipts();
-  const { data: suppliers = [] } = useSuppliers();
+  const [currentPage, setCurrentPage] = useState(1);
+  const { data: response, isLoading } = usePurchaseOrders(currentPage, PAGE_SIZE);
+  
+  const orders = response?.data || [];
+  const pagination = response?.pagination;
 
   // Search & filter states
   const [searchTerm, setSearchTerm] = useState('');
   const [advancedFilters, setAdvancedFilters] = useState<AdvancedFilters>({
     importCode: '',
-    purchaseOrderCode: '',
-    productCode: '',
-    productName: '',
     supplierCode: '',
     supplierName: '',
     note: '',
@@ -75,18 +61,15 @@ export default function ImportList() {
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [appliedFilters, setAppliedFilters] = useState<AdvancedFilters | null>(null);
 
-  // Pagination
-  const [currentPage, setCurrentPage] = useState(1);
-
   // Selection
   const [selectedImports, setSelectedImports] = useState<Set<string>>(new Set());
 
   // Debounced search
   const debouncedSearch = useDebounce(searchTerm, 300);
 
-  // Filter receipts
-  const filteredReceipts = useMemo(() => {
-    let result = receipts;
+  // Filter orders (client-side for search term)
+  const filteredOrders = useMemo(() => {
+    let result = orders;
 
     // Main search (import code)
     if (debouncedSearch) {
@@ -123,14 +106,7 @@ export default function ImportList() {
     }
 
     return result;
-  }, [receipts, debouncedSearch, appliedFilters]);
-
-  // Pagination
-  const totalPages = Math.ceil(filteredReceipts.length / PAGE_SIZE);
-  const paginatedReceipts = useMemo(() => {
-    const start = (currentPage - 1) * PAGE_SIZE;
-    return filteredReceipts.slice(start, start + PAGE_SIZE);
-  }, [filteredReceipts, currentPage]);
+  }, [orders, debouncedSearch, appliedFilters]);
 
   // Reset page when filters change
   useEffect(() => {
@@ -139,10 +115,10 @@ export default function ImportList() {
 
   // Selection handlers
   const toggleSelectAll = () => {
-    if (selectedImports.size === paginatedReceipts.length) {
+    if (selectedImports.size === filteredOrders.length) {
       setSelectedImports(new Set());
     } else {
-      setSelectedImports(new Set(paginatedReceipts.map((r) => r.id)));
+      setSelectedImports(new Set(filteredOrders.map((r) => r.id)));
     }
   };
 
@@ -167,9 +143,6 @@ export default function ImportList() {
   const handleClearFilters = () => {
     setAdvancedFilters({
       importCode: '',
-      purchaseOrderCode: '',
-      productCode: '',
-      productName: '',
       supplierCode: '',
       supplierName: '',
       note: '',
@@ -187,9 +160,7 @@ export default function ImportList() {
           </Badge>
         );
       case 'draft':
-        return (
-          <Badge variant="secondary">Nháp</Badge>
-        );
+        return <Badge variant="secondary">Nháp</Badge>;
       case 'cancelled':
         return (
           <Badge className="bg-destructive/10 text-destructive border-destructive/20">
@@ -200,6 +171,8 @@ export default function ImportList() {
         return <Badge variant="outline">{status}</Badge>;
     }
   };
+
+  const totalPages = pagination?.total_pages || 1;
 
   return (
     <AppLayout title="Nhập hàng">
@@ -233,10 +206,10 @@ export default function ImportList() {
                 <Filter className="w-4 h-4" />
               </Button>
             </PopoverTrigger>
-            <PopoverContent className="w-96" align="end">
+            <PopoverContent className="w-80" align="end">
               <div className="space-y-4">
                 <h4 className="font-medium">Bộ lọc nâng cao</h4>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-3">
                   <div className="space-y-2">
                     <Label>Mã phiếu nhập</Label>
                     <Input
@@ -248,45 +221,6 @@ export default function ImportList() {
                         }))
                       }
                       placeholder="PN..."
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Mã đặt hàng</Label>
-                    <Input
-                      value={advancedFilters.purchaseOrderCode}
-                      onChange={(e) =>
-                        setAdvancedFilters((prev) => ({
-                          ...prev,
-                          purchaseOrderCode: e.target.value,
-                        }))
-                      }
-                      placeholder="PO..."
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Mã hàng hóa</Label>
-                    <Input
-                      value={advancedFilters.productCode}
-                      onChange={(e) =>
-                        setAdvancedFilters((prev) => ({
-                          ...prev,
-                          productCode: e.target.value,
-                        }))
-                      }
-                      placeholder="SP..."
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Tên hàng hóa</Label>
-                    <Input
-                      value={advancedFilters.productName}
-                      onChange={(e) =>
-                        setAdvancedFilters((prev) => ({
-                          ...prev,
-                          productName: e.target.value,
-                        }))
-                      }
-                      placeholder="Nhập tên..."
                     />
                   </div>
                   <div className="space-y-2">
@@ -315,19 +249,19 @@ export default function ImportList() {
                       placeholder="Nhập tên..."
                     />
                   </div>
-                </div>
-                <div className="space-y-2">
-                  <Label>Ghi chú</Label>
-                  <Input
-                    value={advancedFilters.note}
-                    onChange={(e) =>
-                      setAdvancedFilters((prev) => ({
-                        ...prev,
-                        note: e.target.value,
-                      }))
-                    }
-                    placeholder="Nhập ghi chú..."
-                  />
+                  <div className="space-y-2">
+                    <Label>Ghi chú</Label>
+                    <Input
+                      value={advancedFilters.note}
+                      onChange={(e) =>
+                        setAdvancedFilters((prev) => ({
+                          ...prev,
+                          note: e.target.value,
+                        }))
+                      }
+                      placeholder="Nhập ghi chú..."
+                    />
+                  </div>
                 </div>
                 <div className="flex gap-2">
                   <Button variant="outline" className="flex-1" onClick={handleClearFilters}>
@@ -357,8 +291,8 @@ export default function ImportList() {
                 <TableHead className="w-12">
                   <Checkbox
                     checked={
-                      paginatedReceipts.length > 0 &&
-                      selectedImports.size === paginatedReceipts.length
+                      filteredOrders.length > 0 &&
+                      selectedImports.size === filteredOrders.length
                     }
                     onCheckedChange={toggleSelectAll}
                   />
@@ -367,8 +301,9 @@ export default function ImportList() {
                 <TableHead>Mã phiếu nhập</TableHead>
                 <TableHead>Thời gian</TableHead>
                 <TableHead>Mã NCC</TableHead>
-                <TableHead>Tên NCC</TableHead>
-                <TableHead className="text-right">Tiền VAT nhập</TableHead>
+                <TableHead>Nhà cung cấp</TableHead>
+                <TableHead className="text-right">Tổng tiền hàng</TableHead>
+                <TableHead className="text-right">VAT nhập hàng</TableHead>
                 <TableHead>Ghi chú</TableHead>
                 <TableHead>Trạng thái</TableHead>
               </TableRow>
@@ -376,27 +311,27 @@ export default function ImportList() {
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center py-8">
+                  <TableCell colSpan={10} className="text-center py-8">
                     Đang tải...
                   </TableCell>
                 </TableRow>
-              ) : paginatedReceipts.length === 0 ? (
+              ) : filteredOrders.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
+                  <TableCell colSpan={10} className="text-center py-8 text-muted-foreground">
                     Không có dữ liệu
                   </TableCell>
                 </TableRow>
               ) : (
-                paginatedReceipts.map((receipt) => (
+                filteredOrders.map((order) => (
                   <TableRow
-                    key={receipt.id}
+                    key={order.id}
                     className="cursor-pointer hover:bg-muted/50"
-                    onClick={() => navigate(`/imports/${receipt.id}`)}
+                    onClick={() => navigate(`/imports/${order.id}`)}
                   >
                     <TableCell onClick={(e) => e.stopPropagation()}>
                       <Checkbox
-                        checked={selectedImports.has(receipt.id)}
-                        onCheckedChange={() => toggleSelect(receipt.id)}
+                        checked={selectedImports.has(order.id)}
+                        onCheckedChange={() => toggleSelect(order.id)}
                       />
                     </TableCell>
                     <TableCell onClick={(e) => e.stopPropagation()}>
@@ -404,21 +339,24 @@ export default function ImportList() {
                     </TableCell>
                     <TableCell>
                       <span className="font-mono text-primary hover:underline">
-                        {receipt.code}
+                        {order.code}
                       </span>
                     </TableCell>
-                    <TableCell>{formatDateTime(receipt.receipt_date)}</TableCell>
+                    <TableCell>{formatDateTime(order.received_at)}</TableCell>
                     <TableCell className="font-mono text-sm">
-                      {(receipt.supplier as any)?.code || '-'}
+                      {(order.supplier as any)?.code || '-'}
                     </TableCell>
-                    <TableCell>{(receipt.supplier as any)?.name || 'Khách lẻ'}</TableCell>
+                    <TableCell>{(order.supplier as any)?.name || 'Khách lẻ'}</TableCell>
+                    <TableCell className="text-right font-medium text-primary">
+                      {formatCurrency(order.items_total || order.total_amount || 0)}
+                    </TableCell>
                     <TableCell className="text-right">
-                      {formatCurrency(0)}
+                      {formatCurrency(order.vat_amount || 0)}
                     </TableCell>
                     <TableCell className="max-w-[200px] truncate">
-                      {receipt.note || '-'}
+                      {order.note || '-'}
                     </TableCell>
-                    <TableCell>{getStatusBadge(receipt.status)}</TableCell>
+                    <TableCell>{getStatusBadge(order.status)}</TableCell>
                   </TableRow>
                 ))
               )}
@@ -429,9 +367,7 @@ export default function ImportList() {
           {totalPages > 1 && (
             <div className="flex items-center justify-between px-4 py-3 border-t">
               <p className="text-sm text-muted-foreground">
-                Hiển thị {(currentPage - 1) * PAGE_SIZE + 1} -{' '}
-                {Math.min(currentPage * PAGE_SIZE, filteredReceipts.length)} trong{' '}
-                {filteredReceipts.length} phiếu
+                Trang {currentPage} / {totalPages} ({pagination?.total || 0} phiếu)
               </p>
               <div className="flex items-center gap-2">
                 <Button
