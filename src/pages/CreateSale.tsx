@@ -54,11 +54,11 @@ import {
   useCustomers, 
   useCategories,
   useCreateCustomer,
-  useCreateSalesInvoice,
   formatCurrency,
   Product,
   Customer
 } from '@/hooks/useSupabaseData';
+import { useCreateSalesOrder } from '@/hooks/useSalesOrders';
 import { cn } from '@/lib/utils';
 
 interface SaleItem {
@@ -114,7 +114,7 @@ export default function CreateSale() {
   const { data: customers = [] } = useCustomers();
   const { data: categories = [] } = useCategories();
   const createCustomer = useCreateCustomer();
-  const createSalesInvoice = useCreateSalesInvoice();
+  const createSalesOrder = useCreateSalesOrder();
 
   // Multi-tab state
   const [tabs, setTabs] = useState<InvoiceTab[]>([createEmptyTab(1)]);
@@ -311,7 +311,7 @@ export default function CreateSale() {
     Math.ceil(finalAmount / 100000) * 100000 + 100000,
   ].filter((v, i, a) => a.indexOf(v) === i && v >= finalAmount).slice(0, 4);
 
-  // Handle payment
+  // Handle payment - call sales-order Edge Function
   const handlePayment = async () => {
     if (activeTab.items.length === 0) {
       toast({ title: 'Lỗi', description: 'Vui lòng thêm sản phẩm', variant: 'destructive' });
@@ -323,24 +323,21 @@ export default function CreateSale() {
     }
 
     try {
-      await createSalesInvoice.mutateAsync({
+      // Call sales-order Edge Function - backend handles stock deduction, code generation, calculations
+      await createSalesOrder.mutateAsync({
         customer_id: activeTab.customer?.id || null,
-        discount_type: activeTab.discountType,
-        discount_value: activeTab.discount,
-        extra_fee: activeTab.extraFee,
-        vat_enabled: activeTab.vatEnabled,
-        vat_amount: activeTab.vatAmount,
-        note: activeTab.note,
         items: activeTab.items.map((item) => ({
           product_id: item.product_id,
           quantity: item.quantity,
-          sale_price: item.sale_price,
+          unit_price: item.sale_price,
           discount: item.discount,
-          total_price: item.total_price,
-          cost_price: item.cost_price,
-          profit: item.profit,
         })),
-        payments: [{ method: activeTab.paymentMethod, amount: finalAmount }],
+        discount_type: activeTab.discountType,
+        discount_value: activeTab.discount,
+        vat_rate: activeTab.vatEnabled ? 8 : 0,
+        other_fee: activeTab.extraFee,
+        paid_amount: activeTab.customerPayment,
+        note: activeTab.note,
       });
 
       toast({
@@ -740,7 +737,7 @@ export default function CreateSale() {
               className="w-full" 
               size="lg"
               onClick={handlePayment}
-              disabled={createSalesInvoice.isPending || activeTab.items.length === 0}
+              disabled={createSalesOrder.isPending || activeTab.items.length === 0}
             >
               THANH TOÁN
             </Button>
