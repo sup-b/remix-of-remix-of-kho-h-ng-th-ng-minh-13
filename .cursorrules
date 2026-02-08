@@ -1,0 +1,333 @@
+# Cursor Rules for Quản Lý Bán Hàng Project
+
+## Project Overview
+This is a Vietnamese retail/POS management system built with React + Supabase Edge Functions.
+- Frontend: React 18, TypeScript, Vite, TailwindCSS, shadcn/ui, TanStack Query
+- Backend: Supabase Edge Functions (Deno runtime)
+- Database: PostgreSQL (Supabase)
+
+## Code Style & Conventions
+
+### Language
+- UI text: Vietnamese
+- Code comments: Vietnamese or English
+- Variable/function names: English (camelCase)
+- Database columns: snake_case
+
+### TypeScript
+- Strict mode enabled
+- Use interfaces over types for objects
+- Import paths use `@/` alias for `src/`
+
+### React Patterns
+- Functional components only
+- Custom hooks in `src/hooks/`
+- Use TanStack Query for data fetching
+- Use shadcn/ui components from `src/components/ui/`
+
+---
+
+## Database Schema
+
+### Core Tables
+
+```
+products
+├── id: uuid (PK)
+├── code: text (SP000001, SP000002, ...)
+├── name: text
+├── cost_price: numeric (auto-updated on purchase)
+├── sale_price_default: numeric
+├── stock: numeric (current inventory)
+├── category_id: uuid (FK → categories)
+├── vat_sale: numeric (%)
+├── unit: text (default: 'cái')
+└── status: text ('active' | 'inactive')
+
+suppliers
+├── id: uuid (PK)
+├── code: text (NCC00001, NCC00002, ...)
+├── name: text
+├── phone, email, address: text
+└── status: text
+
+customers
+├── id: uuid (PK)
+├── code: text
+├── name: text
+├── phone, email, address: text
+└── status: text
+
+purchase_orders (Phiếu nhập hàng)
+├── id: uuid (PK)
+├── code: text (PNmmdd000 - resets daily)
+├── supplier_id: uuid (FK)
+├── status: text ('draft' | 'completed' | 'cancelled')
+├── total_amount, discount_value, vat_amount, final_amount: numeric
+└── items → purchase_order_items
+
+purchase_order_items
+├── purchase_order_id: uuid (FK)
+├── product_id: uuid (FK)
+├── quantity, unit_price, discount, total_amount: numeric
+└── import_price: numeric (price after discount)
+
+sales_orders (Đơn bán hàng)
+├── id: uuid (PK)
+├── code: text (HDyyMMdd000 - resets daily)
+├── customer_id: uuid (FK, nullable)
+├── status: text ('draft' | 'completed' | 'cancelled')
+├── payment_status: text ('unpaid' | 'partial' | 'paid')
+├── total_items, after_discount, vat_amount, final_amount: numeric
+├── paid_amount: numeric
+└── items → sales_order_items
+
+sales_order_items
+├── sales_order_id: uuid (FK)
+├── product_id: uuid (FK)
+├── quantity, unit_price, discount, total_amount: numeric
+├── cost_price: numeric (snapshot at sale time)
+└── profit: numeric (calculated)
+
+stock_cards (Inventory audit trail)
+├── product_id: uuid (FK)
+├── ref_code: text (PN.../HD...)
+├── ref_type: text ('PN' | 'HD')
+├── transaction_type: text ('IN' | 'OUT')
+├── quantity: numeric (+/-)
+├── stock_before, stock_after: numeric
+└── unit_cost: numeric
+```
+
+### Database Functions
+```sql
+generate_product_code()     -- Returns: 'SP000001' (increments forever)
+generate_supplier_code()    -- Returns: 'NCC00001' (increments forever)
+generate_purchase_order_code() -- Returns: 'PN0208001' (resets daily)
+generate_sales_order_code()    -- Returns: 'HD260208001' (resets daily)
+```
+
+---
+
+## Edge Functions (Backend API)
+
+All endpoints: `POST /functions/v1/{function-name}`
+All responses: `{ success: boolean, data?: any, error?: string }`
+
+### code-generator
+```typescript
+// Generate auto-incrementing codes
+Request: { type: 'product' | 'supplier' | 'purchase_order' | 'sales_order' }
+Response: { success: true, code: 'SP000001' }
+```
+
+### stock-service
+```typescript
+// Get current stock
+{ action: 'get_stock', product_id: 'uuid' }
+
+// Check availability before sale
+{ action: 'validate_availability', product_id: 'uuid', quantity: number }
+
+// Update stock (called by purchase-order and sales-order)
+{
+  action: 'move',
+  movements: [{
+    product_id: 'uuid',
+    quantity: number,
+    unit_cost: number,        // Required for IN
+    ref_code: 'PN0208001',
+    ref_type: 'PN' | 'HD',
+    transaction_type: 'IN' | 'OUT'
+  }]
+}
+```
+
+**Stock Logic:**
+- IN: stock += quantity, cost_price = weighted average
+- OUT: stock -= quantity (rejects if stock < quantity)
+- All changes logged to stock_cards
+
+### price-calculator
+```typescript
+// Calculate single item
+{ action: 'calculate_item', quantity, unit_price, discount_percent }
+
+// Calculate order totals
+{
+  action: 'calculate_order',
+  items_total: number,
+  discount_type: 'percent' | 'amount',
+  discount_value: number,
+  vat_rate: number,
+  other_fee: number
+}
+
+// Calculate profit for sales items
+{
+  action: 'calculate_profit',
+  items: [{ quantity, sale_price, cost_price, discount }]
+}
+```
+
+### purchase-order
+```typescript
+// Create draft order
+{ action: 'create', data: { supplier_id, items: [...], discount_type, discount_value, vat_rate, note } }
+
+// Complete order (triggers stock IN)
+{ action: 'complete', order_id: 'uuid' }
+
+// Get order details
+{ action: 'get', order_id: 'uuid' }
+
+// List orders with pagination
+{ action: 'list', page: 1, limit: 50, status?, supplier_id? }
+```
+
+### sales-order
+```typescript
+// Create and complete sale (auto-triggers stock OUT)
+{
+  action: 'create',
+  data: {
+    customer_id?: 'uuid',
+    items: [{ product_id, quantity, unit_price, discount }],
+    discount_type, discount_value,
+    vat_rate, other_fee,
+    paid_amount,
+    note
+  }
+}
+
+// Get order details
+{ action: 'get', order_id: 'uuid' }
+
+// List orders
+{ action: 'list', page: 1, limit: 50, status?, payment_status?, customer_id? }
+```
+
+---
+
+## Business Rules (CRITICAL)
+
+### Inventory Rules
+1. Stock only changes via purchase orders (IN) or sales orders (OUT)
+2. NEVER allow negative stock - always validate before OUT
+3. ALL stock changes must be logged to stock_cards
+4. cost_price uses weighted average: `(old_stock * old_cost + new_qty * new_cost) / new_stock`
+
+### Financial Rules
+1. Backend recalculates ALL amounts - never trust frontend values
+2. NO negative values allowed for quantity, price, discount, paid_amount
+3. Order total formula:
+   ```
+   items_total = Σ(qty * unit_price * (1 - discount%/100))
+   after_discount = items_total - order_discount
+   vat_amount = after_discount * vat_rate / 100
+   final_amount = after_discount + vat_amount + other_fee
+   ```
+4. Profit = (sale_price - cost_price) * quantity * (1 - discount%/100)
+
+### Status Rules
+- Draft orders: can edit, delete, complete
+- Completed orders: READ-ONLY, no modifications
+- Cancelled orders: READ-ONLY
+
+### Payment Status
+```
+paid_amount = 0           → 'unpaid'
+0 < paid_amount < final   → 'partial'
+paid_amount >= final      → 'paid'
+```
+
+---
+
+## File Structure
+
+```
+src/
+├── components/
+│   ├── layout/        # AppLayout, Sidebar, Header
+│   ├── pos/           # POS/sale components
+│   ├── products/      # Product CRUD
+│   ├── imports/       # Purchase order components
+│   └── ui/            # shadcn/ui (DO NOT MODIFY)
+├── hooks/
+│   ├── usePurchaseOrders.ts  # Purchase order API calls
+│   ├── useSalesOrders.ts     # Sales order API calls
+│   └── useProducts.ts        # Product queries
+├── pages/
+│   ├── imports/       # ImportList, ImportCreate, ImportDetail
+│   ├── sales/         # SalesOrderDetail
+│   ├── CreateSale.tsx # POS interface
+│   ├── Sales.tsx      # Sales list
+│   └── Products.tsx
+├── integrations/supabase/
+│   ├── client.ts      # AUTO-GENERATED, DO NOT EDIT
+│   └── types.ts       # AUTO-GENERATED, DO NOT EDIT
+└── types/index.ts     # TypeScript interfaces
+
+supabase/functions/
+├── code-generator/index.ts
+├── stock-service/index.ts
+├── price-calculator/index.ts
+├── purchase-order/index.ts
+└── sales-order/index.ts
+```
+
+---
+
+## Common Patterns
+
+### Calling Edge Functions
+```typescript
+const response = await supabase.functions.invoke('sales-order', {
+  body: { action: 'create', data: {...} }
+});
+if (response.error) throw response.error;
+const result = response.data;
+if (!result.success) throw new Error(result.error);
+return result.data;
+```
+
+### Data Fetching with TanStack Query
+```typescript
+const { data, isLoading } = useQuery({
+  queryKey: ['products'],
+  queryFn: async () => {
+    const { data, error } = await supabase
+      .from('products')
+      .select('*')
+      .eq('status', 'active');
+    if (error) throw error;
+    return data;
+  }
+});
+```
+
+### Form Handling
+- Use react-hook-form + zod for validation
+- All monetary inputs use numeric type
+- Format display: `new Intl.NumberFormat('vi-VN').format(amount)`
+
+---
+
+## DO NOT
+
+1. ❌ Edit `src/integrations/supabase/client.ts` or `types.ts`
+2. ❌ Allow negative stock or negative amounts
+3. ❌ Modify completed orders
+4. ❌ Skip stock_cards logging
+5. ❌ Trust frontend calculations for final amounts
+6. ❌ Use images (project constraint)
+7. ❌ Hardcode data
+
+## ALWAYS
+
+1. ✅ Validate stock before sales
+2. ✅ Use Edge Functions for business logic
+3. ✅ Log all inventory changes to stock_cards
+4. ✅ Recalculate totals on backend
+5. ✅ Use Vietnamese for UI text
+6. ✅ Follow existing code patterns
